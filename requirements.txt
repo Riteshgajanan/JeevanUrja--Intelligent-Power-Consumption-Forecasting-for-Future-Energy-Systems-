@@ -1,4 +1,4 @@
-# --- Streamlit + ML Environment (Stable with Python 3.13) ---
+# --- Stable ML environment compatible with Streamlit Cloud (Python 3.13) ---
 streamlit==1.38.0
 pandas==2.2.3
 numpy==1.26.4
