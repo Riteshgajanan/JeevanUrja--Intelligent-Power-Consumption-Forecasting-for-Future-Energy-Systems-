@@ -13,11 +13,27 @@ st.set_page_config(page_title="JeevanUrja — Energy Forecast", layout="wide")
 # ---- Helper: load artifacts ----
 @st.cache_resource(ttl=3600)
 def load_artifacts(model_path='energy_consumption_model.pkl', scaler_path='scaler.pkl'):
-    model = joblib.load(model_path)
-    scaler = joblib.load(scaler_path)
-    return model, scaler
+    import joblib
+    import os
 
-model, scaler = load_artifacts()
+    try:
+        if not os.path.exists(model_path):
+            st.error(f"❌ Model file missing: {model_path}")
+            st.stop()
+        if not os.path.exists(scaler_path):
+            st.error(f"❌ Scaler file missing: {scaler_path}")
+            st.stop()
+
+        model = joblib.load(model_path)
+        scaler = joblib.load(scaler_path)
+        st.success("✅ Model and Scaler loaded successfully.")
+        return model, scaler
+
+    except Exception as e:
+        st.error(f"❌ Failed to load model or scaler: {e}")
+        st.info("Tip: Re-save your model using the same scikit-learn & joblib versions as in requirements.txt.")
+        st.stop()
+
 
 # The features expected (order must match training)
 FEATURE_ORDER = ['Temperature','Humidity','WindSpeed',
@@ -117,3 +133,4 @@ st.write("Tips:")
 st.write("- Make sure the `best_model_random_forest.pkl` and `scaler.pkl` files are in the same directory as this app.")
 st.write("- Use realistic weather/time values for meaningful predictions.")
 st.write("- To deploy: push this folder to GitHub and connect to Streamlit Cloud (instructions included below).")
+
