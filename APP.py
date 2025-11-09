@@ -1,52 +1,90 @@
-# app.py
+# ...existing code...
 import streamlit as st
 import pandas as pd
 import numpy as np
 from datetime import datetime
+import logging
+from typing import Optional, Tuple
 
-# ---- Safe imports ----
+print("APP.py starting (startup log)")
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("JeevanUrja")
+
+# Optional imports (graceful fallback)
+_joblib_available = True
+_matplotlib_available = True
 try:
-    import joblib
-    import matplotlib.pyplot as plt
-    import seaborn as sns
-except ModuleNotFoundError as e:
-    st.error("❌ Required libraries missing. Please make sure your `requirements.txt` "
-             "contains joblib, matplotlib, and seaborn.")
-    st.stop()
+    import joblib  # type: ignore
+except Exception:
+    _joblib_available = False
 
-# ---- Page Config ----
+try:
+    import matplotlib.pyplot as plt  # type: ignore
+except Exception:
+    _matplotlib_available = False
+
+# Page config
 st.set_page_config(page_title="JeevanUrja — Energy Forecast", layout="wide")
 
-# ---- Load Model and Scaler ----
-@st.cache_resource(ttl=3600)
-def load_artifacts(model_path="energy_consumption_model.pkl", scaler_path="scaler.pkl"):
-    model = joblib.load(model_path)
-    scaler = joblib.load(scaler_path)
-    return model, scaler
+if not _joblib_available or not _matplotlib_available:
+    missing = []
+    if not _joblib_available:
+        missing.append("joblib")
+    if not _matplotlib_available:
+        missing.append("matplotlib")
+    st.sidebar.warning(
+        "Optional libraries missing: "
+        + ", ".join(missing)
+        + ". App will run in demo/fallback mode. Add them to requirements.txt to enable full features."
+    )
 
-try:
-    model, scaler = load_artifacts()
-except Exception as e:
-    st.error(f"⚠️ Failed to load model or scaler: {e}")
-    st.stop()
-
-# ---- Feature order ----
+# Feature order expected by model
 FEATURE_ORDER = [
     "Temperature", "Humidity", "WindSpeed",
     "GeneralDiffuseFlows", "DiffuseFlows",
     "Hour", "DayOfWeek", "IsWeekend", "Month"
 ]
 
-# ---- Title ----
+# Lazy cached loader (only runs when called)
+@st.cache_resource(ttl=3600)
+def load_artifacts_cached(model_path: str = "energy_consumption_model.pkl",
+                          scaler_path: str = "scaler.pkl") -> Tuple[Optional[object], Optional[object]]:
+    if not _joblib_available:
+        raise RuntimeError("joblib not available")
+    model = joblib.load(model_path)
+    scaler = joblib.load(scaler_path)
+    return model, scaler
+
+def load_artifacts_safe() -> Tuple[Optional[object], Optional[object], Optional[str]]:
+    try:
+        model, scaler = load_artifacts_cached()
+        return model, scaler, None
+    except FileNotFoundError as e:
+        return None, None, f"Artifact file not found: {e}"
+    except Exception as e:
+        return None, None, str(e)
+
+# Demo fallback predictor so UI always works
+def demo_predict(input_df: pd.DataFrame) -> np.ndarray:
+    w = {
+        "Temperature": 0.5, "Humidity": 0.2, "WindSpeed": -0.3,
+        "GeneralDiffuseFlows": 0.04, "DiffuseFlows": 0.03,
+        "Hour": 0.6, "DayOfWeek": 1.0, "IsWeekend": -5.0, "Month": 0.2
+    }
+    base = 80.0
+    # compute weighted sum vectorized
+    pred = base + sum(input_df[col].astype(float) * w[col] for col in FEATURE_ORDER)
+    return np.maximum(pred.values.reshape(-1), 0.0)
+
+# UI
 st.title("🔋 JeevanUrja — Intelligent Power Consumption Forecasting")
-st.markdown("Predict **Total Power Consumption** based on weather and time inputs.")
+st.markdown("Demo-friendly UI. If model or files are missing, a demo predictor and charts are shown.")
 
 col1, col2 = st.columns([1, 1])
 
-# ---- Input Section ----
 with col1:
     st.header("Input Parameters")
-
     temp = st.number_input("🌡️ Temperature (°C)", value=25.0, step=0.1)
     humidity = st.number_input("💧 Humidity (%)", value=60.0, step=0.1)
     windspeed = st.number_input("🌬️ Wind Speed (m/s)", value=3.0, step=0.1)
@@ -68,47 +106,80 @@ with col1:
     if st.button("🔮 Predict Consumption"):
         input_df = pd.DataFrame([[temp, humidity, windspeed, gdf, dfv, hour, dayofweek, isweekend, month]],
                                 columns=FEATURE_ORDER)
-        input_scaled = scaler.transform(input_df)
-        prediction = model.predict(input_scaled)[0]
-        st.success(f"⚡ Predicted Total Consumption: **{prediction:,.2f} units**")
+        model, scaler, err = load_artifacts_safe()
+        if model is not None and scaler is not None:
+            try:
+                input_scaled = scaler.transform(input_df)
+                prediction = model.predict(input_scaled)[0]
+                st.success(f"⚡ Predicted Total Consumption: **{prediction:,.2f} units**")
+            except Exception as e:
+                st.warning(f"Model present but prediction failed: {e}. Using demo predictor.")
+                pred = demo_predict(input_df)[0]
+                st.success(f"⚡ Demo Predicted Total Consumption: **{pred:,.2f} units**")
+        else:
+            st.info("⚠️ Model or scaler not available — using demo predictor.")
+            if err:
+                st.caption(f"Load info: {err}")
+            pred = demo_predict(input_df)[0]
+            st.success(f"⚡ Demo Predicted Total Consumption: **{pred:,.2f} units**")
 
-# ---- Right Section ----
 with col2:
-    st.header("📊 Insights & Visuals")
+    st.header("📊 Sample Chart & Data")
 
-    # Feature importance
-    try:
-        if hasattr(model, "feature_importances_"):
-            importances = model.feature_importances_
-            fi = pd.Series(importances, index=FEATURE_ORDER).sort_values(ascending=True)
-            fig, ax = plt.subplots(figsize=(6, 4))
-            fi.plot(kind="barh", color="skyblue", ax=ax)
-            ax.set_title("Feature Importance (Random Forest)")
-            st.pyplot(fig)
-    except Exception as e:
-        st.warning(f"Could not display feature importance: {e}")
+    # Always show a sample consumption chart so the app renders something
+    def sample_df():
+        times = pd.date_range(start="2025-01-01", periods=24, freq="H")
+        base = 100 + 20 * np.sin(np.linspace(0, 2 * np.pi, 24))
+        values = base + np.random.randn(24) * 5
+        return pd.DataFrame({"Datetime": times, "Consumption": np.round(values, 2)}).set_index("Datetime")
 
-    # Show recent trends
-    try:
-        df = pd.read_csv("powerconsumption.csv", parse_dates=["Datetime"])
-        if "Total_Consumption" not in df.columns:
-            df["Total_Consumption"] = (
-                df["PowerConsumption_Zone1"] +
-                df["PowerConsumption_Zone2"] +
-                df["PowerConsumption_Zone3"]
-            )
-        recent = df.set_index("Datetime").resample("H").mean().tail(48)
-        st.subheader("Recent Hourly Consumption Trend")
-        fig2, ax2 = plt.subplots(figsize=(8, 3))
-        ax2.plot(recent.index, recent["Total_Consumption"], color="orange")
-        ax2.set_xlabel("Datetime")
-        ax2.set_ylabel("Total Consumption")
-        st.pyplot(fig2)
-    except FileNotFoundError:
-        st.info("📁 'powerconsumption.csv' not found.")
-    except Exception as e:
-        st.warning(f"Error loading dataset preview: {e}")
+    st.subheader("Sample Consumption (demo)")
+    st.line_chart(sample_df())
 
-# ---- Footer ----
+    st.subheader("Upload / Preview CSV")
+    uploaded = st.file_uploader("Upload powerconsumption.csv (optional)", type=["csv"])
+    df_source = None
+    if uploaded is not None:
+        try:
+            df_source = pd.read_csv(uploaded, parse_dates=["Datetime"])
+        except Exception as e:
+            st.warning(f"Uploaded file read error: {e}")
+
+    if df_source is None:
+        try:
+            df_source = pd.read_csv("powerconsumption.csv", parse_dates=["Datetime"])
+        except FileNotFoundError:
+            df_source = None
+        except Exception as e:
+            st.warning(f"Error reading powerconsumption.csv: {e}")
+
+    if df_source is not None:
+        try:
+            if "Total_Consumption" not in df_source.columns:
+                zone_cols = [c for c in df_source.columns if "PowerConsumption" in c]
+                if len(zone_cols) >= 1:
+                    df_source["Total_Consumption"] = df_source[zone_cols].sum(axis=1)
+                else:
+                    numeric_cols = df_source.select_dtypes("number").columns
+                    if len(numeric_cols) > 0:
+                        df_source["Total_Consumption"] = df_source[numeric_cols[0]]
+                    else:
+                        raise ValueError("No numeric consumption column found")
+            recent = df_source.set_index("Datetime").resample("H").mean().tail(48)
+            st.subheader("Recent Hourly Consumption Trend")
+            if _matplotlib_available:
+                fig, ax = plt.subplots(figsize=(8, 3))
+                ax.plot(recent.index, recent["Total_Consumption"], color="orange")
+                ax.set_xlabel("Datetime")
+                ax.set_ylabel("Total Consumption")
+                st.pyplot(fig)
+            else:
+                st.line_chart(recent["Total_Consumption"])
+        except Exception as e:
+            st.warning(f"Error processing CSV preview: {e}")
+    else:
+        st.info("No CSV available. Upload one to preview trends.")
+
 st.markdown("---")
 st.caption("Developed by Ritesh — JeevanUrja: Intelligent Power Consumption Forecasting")
+# ...existing code...
