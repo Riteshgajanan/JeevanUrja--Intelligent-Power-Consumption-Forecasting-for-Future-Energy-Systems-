@@ -3,9 +3,9 @@ The JeevanUrja project is an intelligent system designed to forecast total energ
 
 
 ⚡ Jeevan_Urja — Intelligent Power Consumption Forecasting for Future Energy Systems
-Computational Intelligence Laboratory Project (2024–25)
+Computational Intelligence Laboratory Project (2025–26)
 
-MIT-ADT University, School of SEE Engineering
+MIT-Academy of Engineering, Alandi ,Pune
 Division C | Batch C2
 
 👥 Team Members
